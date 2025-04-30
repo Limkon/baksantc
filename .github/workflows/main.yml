@@ -1,0 +1,55 @@
+name: FTP Daily Backup
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 每天 UTC 时间凌晨 2 点运行
+  workflow_dispatch:     # 手动触发支持
+
+jobs:
+  ftp-backup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install lftp
+        run: sudo apt-get update && sudo apt-get install -y lftp
+
+      - name: Create Backup Directory
+        run: mkdir -p bakmessage
+
+      - name: Download Files from FTP
+        run: |
+          lftp -u zote_bak,132579r. ftp://ftp-zote.alwaysdata.net <<EOF
+          mirror --only-newer --no-empty-dirs --verbose --continue --parallel=2 ./ bakmessage
+          quit
+          EOF
+
+      - name: Compare and Keep Larger Files
+        run: |
+          for ftp_file in bakmessage/*; do
+            local_file="./bakmessage/$(basename "$ftp_file")"
+            if [ -f "$local_file" ]; then
+              remote_size=$(stat -c%s "$ftp_file")
+              local_size=$(stat -c%s "$local_file")
+              if [ "$remote_size" -gt "$local_size" ]; then
+                cp -f "$ftp_file" "$local_file"
+              fi
+            else
+              cp "$ftp_file" "$local_file"
+            fi
+          done
+
+      - name: Commit and Push Updated Files
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+          git add bakmessage
+          git commit -m "Automated FTP backup: $(date -u +"%Y-%m-%d %H:%M:%S")" || echo "No changes to commit"
+          git push
